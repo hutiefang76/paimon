@@ -25,6 +25,7 @@ import org.apache.paimon.format.FormatReaderFactory;
 import org.apache.paimon.format.FormatWriter;
 import org.apache.paimon.format.FormatWriterFactory;
 import org.apache.paimon.format.SimpleStatsExtractor;
+import org.apache.paimon.format.SupportsFileMetadata;
 import org.apache.paimon.fs.PositionOutputStream;
 import org.apache.paimon.options.ConfigOption;
 import org.apache.paimon.options.ConfigOptions;
@@ -111,30 +112,39 @@ public class AvroFileFormat extends FileFormat {
     }
 
     /** A {@link FormatWriterFactory} to write {@link InternalRow}. */
-    private class RowAvroWriterFactory implements FormatWriterFactory {
+    private class RowAvroWriterFactory implements FormatWriterFactory, SupportsFileMetadata {
 
-        private final AvroWriterFactory<InternalRow> factory;
+        private final RowType rowType;
 
         private RowAvroWriterFactory(RowType rowType) {
-            this.factory =
+            this.rowType = rowType;
+        }
+
+        @Override
+        public FormatWriter create(PositionOutputStream out, String compression)
+                throws IOException {
+            return create(out, compression, new HashMap<>());
+        }
+
+        @Override
+        public FormatWriter create(
+                PositionOutputStream out, String compression, Map<String, String> fileMetadata)
+                throws IOException {
+            AvroWriterFactory<InternalRow> factory =
                     new AvroWriterFactory<>(
-                            (out, compression) -> {
+                            (outputStream, writerCompression) -> {
                                 Schema schema =
                                         AvroSchemaConverter.convertToSchema(
                                                 rowType, options.get(AVRO_ROW_NAME_MAPPING));
                                 AvroRowDatumWriter datumWriter = new AvroRowDatumWriter(rowType);
                                 DataFileWriter<InternalRow> dataFileWriter =
                                         new DataFileWriter<>(datumWriter);
-                                dataFileWriter.setCodec(createCodecFactory(compression));
+                                dataFileWriter.setCodec(createCodecFactory(writerCompression));
                                 dataFileWriter.setFlushOnEveryBlock(false);
-                                dataFileWriter.create(schema, out);
+                                fileMetadata.forEach(dataFileWriter::setMeta);
+                                dataFileWriter.create(schema, outputStream);
                                 return dataFileWriter;
                             });
-        }
-
-        @Override
-        public FormatWriter create(PositionOutputStream out, String compression)
-                throws IOException {
             AvroBulkWriter<InternalRow> writer = factory.create(out, compression);
             return new FormatWriter() {
 
